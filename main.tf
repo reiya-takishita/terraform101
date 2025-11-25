@@ -13,154 +13,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "ap-northeast-1"
-}
-
-variable "project_name" {
-  description = "Project name for resource naming"
-  type        = string
-  default     = "amplify-hosting"
-}
-
-variable "environment" {
-  description = "Environment (dev, stg, prod)"
-  type        = string
-  default     = "dev"
-}
-
-variable "repository_url" {
-  description = "Git repository URL (GitHub, GitLab, Bitbucket, CodeCommit)"
-  type        = string
-  default     = "your-repository-url"
-}
-
-variable "repository_branch" {
-  description = "Git branch to deploy"
-  type        = string
-  default     = "main"
-}
-
-variable "github_access_token" {
-  description = "GitHub personal access token (required for GitHub repositories)"
-  type        = string
-  sensitive   = true
-  default     = "your-github-access-token"
-}
-
-variable "build_spec" {
-  description = "Base build specification (without appRoot)"
-  type        = string
-  default     = <<-EOT
-version: 1
-applications:
-  - frontend:
-      phases:
-        preBuild:
-          commands:
-            - export NODE_OPTIONS=--openssl-legacy-provider
-            - yarn install --frozen-lockfile || yarn install
-        build:
-          commands:
-            - yarn build
-      artifacts:
-        baseDirectory: .next
-        files:
-          - '**/*'
-      cache:
-        paths:
-          - .next/cache/**/*
-          - node_modules/**/*
-EOT
-}
-
-variable "framework" {
-  description = "Frontend framework (react, vue, angular, nextjs, etc.). Leave empty for auto-detection."
-  type        = string
-  default     = null
-}
-
-variable "domain_name" {
-  description = "Custom domain name"
-  type        = string
-  default     = ""
-}
-
-variable "enable_auto_branch_creation" {
-  description = "Enable automatic branch creation"
-  type        = bool
-  default     = false
-}
-
-variable "auto_branch_creation_patterns" {
-  description = "Patterns for automatic branch creation"
-  type        = list(string)
-  default     = ["feature/*", "dev"]
-}
-
-variable "platform" {
-  description = "Platform (WEB_COMPUTE for SSR, WEB for static)"
-  type        = string
-  default     = "WEB_COMPUTE"
-}
-
-variable "stage" {
-  description = "Stage (PRODUCTION, BETA, DEVELOPMENT, EXPERIMENTAL)"
-  type        = string
-  default     = "DEVELOPMENT"
-}
-
-variable "enable_basic_auth" {
-  description = "Enable basic authentication"
-  type        = bool
-  default     = false
-}
-
-variable "basic_auth_username" {
-  description = "Basic auth username"
-  type        = string
-  default     = ""
-}
-
-variable "basic_auth_password" {
-  description = "Basic auth password"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "environment_variables" {
-  description = "Environment variables for build"
-  type        = map(string)
-  default     = {environment = "development"}
-  sensitive   = true
-}
-
-variable "enable_notifications" {
-  description = "Enable build notifications"
-  type        = bool
-  default     = true
-}
-
-variable "notification_email" {
-  description = "Email for build notifications"
-  type        = string
-  default     = "your-email@example.com"
-}
-
-variable "custom_rules" {
-  description = "Custom rewrite and redirect rules"
-  type = list(object({
-    source    = string
-    target    = string
-    status    = string
-    condition = string
-  }))
-  default = []
-}
-
 # IAM Role for Amplify
 resource "aws_iam_role" "amplify" {
   name = "${var.project_name}-${var.environment}-amplify-role"
@@ -225,11 +77,49 @@ resource "aws_iam_role_policy_attachment" "amplify_service" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmplifyBackendDeployFullAccess"
 }
 
+# VPC、サブネット、NATゲートウェイ、インターネットゲートウェイをプロビジョニング
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0" # モジュールバージョンは適宜最新の安定版を使用してください
+
+  name = "${var.project_name}-${var.environment}-vpc"
+  cidr = var.vpc_cidr
+  azs  = var.azs
+
+  public_subnets = var.public_subnets_cidr
+  private_subnets = var.private_subnets_cidr
+  elasticache_subnets = var.elasticache_subnets_cidr
+
+  enable_nat_gateway = var.enable_nat_gateway
+  single_nat_gateway = var.single_nat_gateway
+
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-vpc"
+    Environment = var.environment
+    Project     = var.project_name
+  }
+}
+
+# ElastiCache for Redisが使用する専用のサブネットグループを作成
+resource "aws_elasticache_subnet_group" "redis" {
+  name        = "${var.project_name}-${var.environment}-redis-subnet-group"
+  subnet_ids  = module.vpc.elasticache_subnets
+  description = "ElastiCache subnet group for ${var.project_name}-${var.environment}"
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-redis-subnet-group"
+    Environment = var.environment
+    Project     = var.project_name
+  }
+}
+
 # Amplify App
 resource "aws_amplify_app" "main" {
   name       = "${var.project_name}-${var.environment}"
   repository = var.repository_url
-
   # GitHub access token (required for GitHub repositories)
   access_token = var.github_access_token
 
